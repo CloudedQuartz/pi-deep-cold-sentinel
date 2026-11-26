@@ -61,14 +61,15 @@ const withManualTimers = async (run: (fire: () => void) => Promise<void>) => {
 function harness(opts: {
   branch: ReturnType<typeof served>;
   model: { provider: string; id: string };
-  confirm?: () => Promise<boolean>;
+  answer?: (options: string[]) => Promise<string>;
   usageTokens?: number;
 }) {
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   const notified: string[] = [];
-  const confirmTitles: string[] = [];
+  const askTitles: string[] = [];
+  const askOptions: string[][] = [];
   let aborts = 0;
-  let confirmCalls = 0;
+  let askCalls = 0;
   let compacts = 0;
   let cues = 0;
   const pi = {
@@ -87,10 +88,11 @@ function harness(opts: {
     getContextUsage: () => ({ tokens: opts.usageTokens ?? DEEP_TOKENS }),
     ui: {
       notify: (m: string) => notified.push(m),
-      confirm: (title: string, _message: string) => {
-        confirmCalls++;
-        confirmTitles.push(title);
-        return opts.confirm ? opts.confirm() : new Promise<boolean>(() => {});
+      select: (title: string, options: string[]) => {
+        askCalls++;
+        askTitles.push(title);
+        askOptions.push(options);
+        return opts.answer ? opts.answer(options) : new Promise<string>(() => {});
       },
     },
     abort: () => {
@@ -106,9 +108,10 @@ function harness(opts: {
   return {
     handlers,
     ctx,
-    counts: () => ({ aborts, confirmCalls, compacts, cues }),
+    counts: () => ({ aborts, askCalls, compacts, cues }),
     notified,
-    confirmTitles,
+    askTitles,
+    askOptions,
   };
 }
 
@@ -118,7 +121,7 @@ test("a warm deep request passes through ungated", async () => {
     model: { provider: "openai", id: "sol" },
   });
   await h.handlers["context_with_system"]({}, h.ctx);
-  expect(h.counts()).toEqual({ aborts: 0, confirmCalls: 0, compacts: 0, cues: 0 });
+  expect(h.counts()).toEqual({ aborts: 0, askCalls: 0, compacts: 0, cues: 0 });
 });
 
 test("shallow context is never gated", async () => {
@@ -128,28 +131,31 @@ test("shallow context is never gated", async () => {
     usageTokens: 50_000,
   });
   await h.handlers["context_with_system"]({}, h.ctx);
-  expect(h.counts()).toEqual({ aborts: 0, confirmCalls: 0, compacts: 0, cues: 0 });
+  expect(h.counts()).toEqual({ aborts: 0, askCalls: 0, compacts: 0, cues: 0 });
 });
 
 test("an expired prefix is held and asked; as-is lets the request through", async () => {
   const h = harness({
     branch: served([{ provider: "openai", model: "sol", ts: now.t - 10 * 60_000 }]),
     model: { provider: "openai", id: "sol" },
-    confirm: async () => true,
+    answer: async (o) => o[0],
   });
   await h.handlers["context_with_system"]({}, h.ctx);
-  expect(h.counts()).toEqual({ aborts: 0, confirmCalls: 1, compacts: 0, cues: 0 });
-  expect(h.confirmTitles[0]).toContain("expired after 10 min idle");
+  expect(h.counts()).toEqual({ aborts: 0, askCalls: 1, compacts: 0, cues: 0 });
+  expect(h.askTitles[0]).toContain("cache expired");
+  expect(h.askTitles[0]).toContain("send as-is, or compact first?");
+  expect(h.askOptions[0][0]).toContain("Send as-is");
+  expect(h.askOptions[0][1]).toContain("Compact first");
 });
 
 test("answering compact on an expired prefix stops the request and continues small", async () => {
   const h = harness({
     branch: served([{ provider: "openai", model: "sol", ts: now.t - 10 * 60_000 }]),
     model: { provider: "openai", id: "sol" },
-    confirm: async () => false,
+    answer: async (o) => o[1],
   });
   await h.handlers["context_with_system"]({}, h.ctx);
-  expect(h.counts()).toEqual({ aborts: 1, confirmCalls: 1, compacts: 1, cues: 1 });
+  expect(h.counts()).toEqual({ aborts: 1, askCalls: 1, compacts: 1, cues: 1 });
   expect(h.notified.some((m) => m.includes("Compacting"))).toBe(true);
 });
 
@@ -163,7 +169,7 @@ test("silence on an expired prefix defaults to compacting", async () => {
     fire();
     await pending;
   });
-  expect(h.counts()).toEqual({ aborts: 1, confirmCalls: 1, compacts: 1, cues: 1 });
+  expect(h.counts()).toEqual({ aborts: 1, askCalls: 1, compacts: 1, cues: 1 });
 });
 
 test("silence on a model switch defaults to sending as-is", async () => {
@@ -176,8 +182,9 @@ test("silence on a model switch defaults to sending as-is", async () => {
     fire();
     await pending;
   });
-  expect(h.counts()).toEqual({ aborts: 0, confirmCalls: 1, compacts: 0, cues: 0 });
-  expect(h.confirmTitles[0]).toContain("openai-codex/gpt-6.2-sol");
+  expect(h.counts()).toEqual({ aborts: 0, askCalls: 1, compacts: 0, cues: 0 });
+  expect(h.askTitles[0]).toContain("openai-codex/gpt-6.2-sol");
+  expect(h.askOptions[0][0]).toContain("Send as-is");
 });
 
 test("deep context with no warmth anywhere passes through ungated", async () => {
@@ -186,5 +193,5 @@ test("deep context with no warmth anywhere passes through ungated", async () => 
     model: { provider: "opencode-go", id: "glm-5.3" },
   });
   await h.handlers["context_with_system"]({}, h.ctx);
-  expect(h.counts()).toEqual({ aborts: 0, confirmCalls: 0, compacts: 0, cues: 0 });
+  expect(h.counts()).toEqual({ aborts: 0, askCalls: 0, compacts: 0, cues: 0 });
 });

@@ -2,7 +2,8 @@
 
 Pre-billing gate for deep context served cold: the agent loop awaits
 `context_with_system` and uses its return as the request payload, so a cold deep
-request is held there and asked once — send as-is, or compact.
+request is held there and asked once, by name — send as-is, or compact — with
+the stakes spelled out in the option labels themselves.
 Silence takes the case's default: a lapsed cache window compacts, and a model
 switch sends as-is, so unattended runs carry themselves.
 Nothing warm or shallow is ever touched; `/deep-cold` reports state.
@@ -29,6 +30,6 @@ fake `ctx`; no session, network, or provider call.
   supplied by `prompt-cache-stamp` (opencode-go/opencode/openai-codex); without
   it the gate is inert. This is a runtime dependency, not a code import.
 - Relies on Pi's `context_with_system` dispatch from the agent loop (awaited; the
-  handler's return is the request payload), `ctx.ui.confirm`, `ctx.abort`,
+  handler's return is the request payload), `ctx.ui.select`, `ctx.abort`,
   `ctx.compact({onComplete,onError})`, `ctx.isIdle`, and `pi.sendUserMessage`.
 - No machine-specific paths, credentials, or personal settings.

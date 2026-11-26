@@ -2,8 +2,8 @@
  * deep-cold-sentinel.ts — a deep context (250k+) served cold would be recomputed
  * from scratch at full price. The agent loop awaits `context_with_system` and
  * uses its return as the request payload, so the hook itself is the gate: a cold
- * deep request is HELD there and asked once — send as-is, or compact — and
- * silence takes the case's default (expired → compacted, model switch → as-is).
+ * deep request is HELD there and asked once, by name — send as-is, or compact —
+ * and silence takes the case's default (expired → compacted, model switch → as-is).
  * Nothing cold bills silently; nothing warm is touched.
  *
  * All data is native — no private meters:
@@ -92,14 +92,14 @@ const newestKey = (map: Map<string, number>) => {
 /** Identity of the active model — the key a cache anchor is attributed to. */
 const currentKey = (ctx: ExtensionContext) => (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 
-/** Ask once; the request is held while deciding, and silence takes the default. */
-const askAsIs = async (ctx: ExtensionContext, title: string, message: string, defaultAsIs: boolean) => {
+/** Ask once, by name; the request is held while deciding, and silence takes the default. */
+const askHow = async (ctx: ExtensionContext, title: string, options: string[], defaultIndex: number) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const silence = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(defaultAsIs), PROMPT_TIMEOUT_MS);
+  const silence = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve(options[defaultIndex]), PROMPT_TIMEOUT_MS);
   });
   try {
-    return await Promise.race([ctx.ui.confirm(title, message), silence]);
+    return await Promise.race([ctx.ui.select(title, options), silence]);
   } finally {
     clearTimeout(timer);
   }
@@ -122,15 +122,16 @@ export default function (pi: ExtensionAPI) {
     if (mine === undefined && !elsewhere) return; // no warmth anywhere to compare
     const switched = mine === undefined;
     const idleMin = mine !== undefined ? Math.round((Date.now() - mine) / 60_000) : 0;
+    const options = [
+      `Send as-is — recompute ${k(depth)} tokens at full input price`,
+      "Compact first — summarize, then continue small",
+    ];
     const title = switched
-      ? `Deep prefix (${k(depth)}) is cached for ${elsewhere}, not ${key}`
-      : `Deep prefix (${k(depth)}) cache expired after ${idleMin} min idle`;
-    const message = switched
-      ? "Send anyway and recompute it fresh here, or compact before continuing?"
-      : "Send as-is and recompute the prefix fresh, or compact before continuing?";
+      ? `Deep prefix (${k(depth)}) is cached for ${elsewhere}, not ${key} — send as-is, or compact first?`
+      : `Deep prefix (${k(depth)}) cache expired (${idleMin} min idle) — send as-is, or compact first?`;
     // Silence: a deliberate switch expects the verbatim send; a lapsed window
     // expects the compact that keeps the run small.
-    if (await askAsIs(ctx, title, message, switched)) return;
+    if ((await askHow(ctx, title, options, switched ? 0 : 1)) === options[0]) return;
 
     // Compacted: stop the held request before it bills, then continue small.
     ctx.abort();
