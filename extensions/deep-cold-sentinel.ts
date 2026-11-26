@@ -30,7 +30,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 const DEEP = 250_000;
 /** How long the gate waits for an answer before taking the case's default. */
-const PROMPT_TIMEOUT_MS = 30_000;
+const PROMPT_TIMEOUT_MS = 10_000;
 /** Continuation sent into the compacted prefix — the ask is already in it. */
 const CONTINUE_CUE = "continue";
 
