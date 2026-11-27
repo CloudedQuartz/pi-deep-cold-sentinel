@@ -29,7 +29,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const DEEP = 250_000;
-/** How long the gate waits for an answer before taking the case's default. */
+/** How long the dialog counts down before auto-dismissing; no answer (timeout or
+ * escape) takes the case's default. */
 const PROMPT_TIMEOUT_MS = 10_000;
 /** Continuation sent into the compacted prefix — the ask is already in it. */
 const CONTINUE_CUE = "continue";
@@ -92,19 +93,6 @@ const newestKey = (map: Map<string, number>) => {
 /** Identity of the active model — the key a cache anchor is attributed to. */
 const currentKey = (ctx: ExtensionContext) => (ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 
-/** Ask once, by name; the request is held while deciding, and silence takes the default. */
-const askHow = async (ctx: ExtensionContext, title: string, options: string[], defaultIndex: number) => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const silence = new Promise<string>((resolve) => {
-    timer = setTimeout(() => resolve(options[defaultIndex]), PROMPT_TIMEOUT_MS);
-  });
-  try {
-    return await Promise.race([ctx.ui.select(title, options), silence]);
-  } finally {
-    clearTimeout(timer);
-  }
-};
-
 export default function (pi: ExtensionAPI) {
   /** The gate: the agent loop awaits this handler and sends what it returns. */
   pi.on("context_with_system", async (_event, ctx) => {
@@ -129,9 +117,12 @@ export default function (pi: ExtensionAPI) {
     const title = switched
       ? `Deep prefix (${k(depth)}) is cached for ${elsewhere}, not ${key} — send as-is, or compact first?`
       : `Deep prefix (${k(depth)}) cache expired (${idleMin} min idle) — send as-is, or compact first?`;
-    // Silence: a deliberate switch expects the verbatim send; a lapsed window
+    // No answer — the dialog's own countdown or an escape — takes the case
+    // default: a deliberate switch expects the verbatim send; a lapsed window
     // expects the compact that keeps the run small.
-    if ((await askHow(ctx, title, options, switched ? 0 : 1)) === options[0]) return;
+    const answer =
+      (await ctx.ui.select(title, options, { timeout: PROMPT_TIMEOUT_MS })) ?? options[switched ? 0 : 1];
+    if (answer === options[0]) return;
 
     // Compacted: stop the held request before it bills, then continue small.
     ctx.abort();

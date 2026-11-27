@@ -40,24 +40,6 @@ afterAll(() => {
   Date.now = realNow;
 });
 
-/** Stub setTimeout/clearTimeout so a "silent" prompt is resolved by hand. */
-const withManualTimers = async (run: (fire: () => void) => Promise<void>) => {
-  const realSet = globalThis.setTimeout;
-  const realClear = globalThis.clearTimeout;
-  let captured: (() => void) | undefined;
-  globalThis.setTimeout = ((cb: () => void) => {
-    captured = cb;
-    return 0 as unknown as ReturnType<typeof setTimeout>;
-  }) as typeof setTimeout;
-  globalThis.clearTimeout = (() => {}) as typeof clearTimeout;
-  try {
-    await run(() => captured?.());
-  } finally {
-    globalThis.setTimeout = realSet;
-    globalThis.clearTimeout = realClear;
-  }
-};
-
 function harness(opts: {
   branch: ReturnType<typeof served>;
   model: { provider: string; id: string };
@@ -68,6 +50,7 @@ function harness(opts: {
   const notified: string[] = [];
   const askTitles: string[] = [];
   const askOptions: string[][] = [];
+  const askDialogOpts: Array<Record<string, unknown>> = [];
   let aborts = 0;
   let askCalls = 0;
   let compacts = 0;
@@ -88,11 +71,13 @@ function harness(opts: {
     getContextUsage: () => ({ tokens: opts.usageTokens ?? DEEP_TOKENS }),
     ui: {
       notify: (m: string) => notified.push(m),
-      select: (title: string, options: string[]) => {
+      select: (title: string, options: string[], dialogOpts: Record<string, unknown>) => {
         askCalls++;
         askTitles.push(title);
         askOptions.push(options);
-        return opts.answer ? opts.answer(options) : new Promise<string>(() => {});
+        askDialogOpts.push(dialogOpts);
+        // No answer — the dialog's own countdown or an escape — resolves undefined.
+        return opts.answer ? opts.answer(options) : Promise.resolve(undefined);
       },
     },
     abort: () => {
@@ -112,6 +97,7 @@ function harness(opts: {
     notified,
     askTitles,
     askOptions,
+    askDialogOpts,
   };
 }
 
@@ -159,32 +145,25 @@ test("answering compact on an expired prefix stops the request and continues sma
   expect(h.notified.some((m) => m.includes("Compacting"))).toBe(true);
 });
 
-test("silence on an expired prefix defaults to compacting", async () => {
+test("a timed-out or escaped ask on an expired prefix defaults to compacting", async () => {
   const h = harness({
     branch: served([{ provider: "openai", model: "sol", ts: now.t - 10 * 60_000 }]),
     model: { provider: "openai", id: "sol" },
   });
-  await withManualTimers(async (fire) => {
-    const pending = h.handlers["context_with_system"]({}, h.ctx);
-    fire();
-    await pending;
-  });
+  await h.handlers["context_with_system"]({}, h.ctx);
   expect(h.counts()).toEqual({ aborts: 1, askCalls: 1, compacts: 1, cues: 1 });
+  expect(h.askDialogOpts[0]).toEqual({ timeout: 10_000 });
 });
 
-test("silence on a model switch defaults to sending as-is", async () => {
+test("a timed-out or escaped ask on a model switch defaults to sending as-is", async () => {
   const h = harness({
     branch: served([{ provider: "openai-codex", model: "gpt-6.2-sol", ts: now.t - 60_000 }]),
     model: { provider: "opencode-go", id: "glm-5.3" },
   });
-  await withManualTimers(async (fire) => {
-    const pending = h.handlers["context_with_system"]({}, h.ctx);
-    fire();
-    await pending;
-  });
+  await h.handlers["context_with_system"]({}, h.ctx);
   expect(h.counts()).toEqual({ aborts: 0, askCalls: 1, compacts: 0, cues: 0 });
   expect(h.askTitles[0]).toContain("openai-codex/gpt-6.2-sol");
-  expect(h.askOptions[0][0]).toContain("Send as-is");
+  expect(h.askDialogOpts[0]).toEqual({ timeout: 10_000 });
 });
 
 test("deep context with no warmth anywhere passes through ungated", async () => {
